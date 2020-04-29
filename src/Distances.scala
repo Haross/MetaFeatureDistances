@@ -2,6 +2,7 @@ import org.apache.spark.sql.functions.{abs, col, lit, mean, monotonically_increa
 import org.apache.spark.sql.types.{NumericType, StringType}
 import org.apache.spark.sql.utils.FindJoinUtils.getColumnsNamesMetaFeatures
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+import org.apache.log4j._
 
 import scala.collection.mutable.Map
 import scala.collection.parallel.ParSeq
@@ -15,6 +16,7 @@ object Distances {
 
     val fileName = dfSource.inputFiles(0).split("/").last
 
+    println("get metafeatures for all datasets")
     // compute metaFeatures for all datasets and merge them in two dataframes: nominal and numeric
     for (i <- 0 to dfCandidates.size-1) {
       var (datasetMetaFeaturesTmp, numericMetaFeaturesTmp, nominalMetaFeaturesTmp) = dfCandidates(i).metaFeatures
@@ -22,11 +24,12 @@ object Distances {
       numericMetaFeatures = numericMetaFeatures.union(numericMetaFeaturesTmp)
     }
 
+    println("normalize meta-features")
     // normalization using z-score
     val nomZscore = normalize(nominalMetaFeatures, "nominal")
     val numZscore = normalize(numericMetaFeatures, "numeric")
 
-//    nomZscore.show
+
 
     // Get the attributes names and meta-features names
     // NOTE: This one differs from the source code in Spark since we got the names through logicalPlan().output instead of schema
@@ -40,6 +43,7 @@ object Distances {
     //val columnsMetaFeaturesNominal = nomZscore.schema.map(_.name)
     //val columnsMetaFeaturesNumeric = numZscore.schema.map(_.name)
 
+    println("Creating pairs")
     val matchingNom = createPairs(attributesNominal, getColumnsNamesMetaFeatures("nominal"), nomZscore, fileName)
     val matchingNum = createPairs(attributesNumeric, getColumnsNamesMetaFeatures("numeric"), numZscore, fileName)
 
@@ -57,38 +61,25 @@ object Distances {
     val nomAttCandidates = zScoreDF.filter(col("ds_name") =!= fileName)
       .select(columns.map(x => col(x).as(s"${x}_2")): _*).cache()
 
-    var attributesPairs: DataFrame = null
+//    var attributesPairs: DataFrame = null
 
     var flag = true
     // select the normalized meta-features from the dataset source
-    val nomSourceAtt = zScoreDF.filter(col("ds_name") === fileName).cache()
-
-    // for each attribute we perform a cross join and compute distances from the pairs
-    for (att <- attributes) {
-
-      // select the normalized meta-features from one attribute from the dataset source and
-      // perform a cross join with the attributes from other datasets
-      var attributesPairsTmp = nomSourceAtt.filter(col("att_name") === att).crossJoin(nomAttCandidates)
+    // perform a cross join with the attributes from other datasets
+    var tmp = zScoreDF.filter(col("ds_name") === fileName).crossJoin(nomAttCandidates)
+    // forcing cache of the distances
+    var attributesPairs = zScoreDF.sparkSession.createDataFrame(tmp.rdd, tmp.schema).cache()
 
       // compute the distances for each meta-feature of two attributes meta-features and save the value in the same metafeature column
-      for (metafeature <- metaFeaturesNames) {
-        attributesPairsTmp = attributesPairsTmp.withColumn(metafeature, abs(col(metafeature) - col(s"${metafeature}_2")))
-      }
+    for (metafeature <- metaFeaturesNames) {
+        attributesPairs = attributesPairs.withColumn(metafeature, abs(col(metafeature) - col(s"${metafeature}_2")))
+    }
       // compute the distance name from the two attributes pair
-      attributesPairsTmp = attributesPairsTmp.withColumn(
+    attributesPairs = attributesPairs.withColumn(
         "name_dist", editDist(col("att_name"), col("att_name_2")))
 
       // remove the meta-features columns from the second attribute pair
-      attributesPairsTmp = attributesPairsTmp.drop(metaFeaturesNames.map(x => s"${x}_2"): _*)
-      if (flag) {
-        attributesPairs = attributesPairsTmp
-        flag = false
-      } else {
-        attributesPairs = attributesPairs.union(attributesPairsTmp)
-      }
-    }
-
-    attributesPairs
+    attributesPairs.drop(metaFeaturesNames.map(x => s"${x}_2"): _*)
   }
 
 
@@ -164,8 +155,6 @@ object Distances {
       ,"dataset_1_anneal.csv","World_countries_env_vars.csv","song_data.csv","movie_metadata.csv","plasma_retinol.csv"
       ,"billboard_lyrics_1964-2015.csv")
 
-
-
 //    val allDatasets = datasetSource +: datasets
 //    computingMetaFeatures(allDatasets,path)
 
@@ -177,10 +166,16 @@ object Distances {
       // appending dataframe to the sequence
       dsCandidates = dsCandidates :+ ds
     }
-    val (nomZscore, numZscore, pairsNominal, pairsNumeric) = computeDistances(dsSource,dsCandidates)
 
-    pairsNominal.write.mode("overwrite").option("header","true")
-      .csv(s"${path}/resources/distances/countriesPairs.csv")
+    val t1 = System.nanoTime
+
+    val (nomZscore, numZscore, pairsNominal, pairsNumeric) = computeDistances(dsSource,dsCandidates)
+    pairsNominal.repartition(1).write
+      .mode("overwrite").option("header","true")
+      .csv(s"${path}/distances/countriesPairs2")
+
+    val duration = (System.nanoTime - t1) / 1e9d
+    println(s"execution time:  ${duration} seconds")
 
     spark.stop()
   }
