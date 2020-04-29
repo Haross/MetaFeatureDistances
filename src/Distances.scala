@@ -147,6 +147,7 @@ object Distances {
   val spark = SparkSession.builder.appName("SparkDistances")
     .master("local[*]")
     //.config("spark.driver.bindAddress","127.0.0.1")
+    .config("spark.driver.maxResultSize","7g")
     .getOrCreate()
 
   def main(args: Array[String]): Unit = {
