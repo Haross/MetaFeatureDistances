@@ -26,7 +26,7 @@ object Distances {
     val nomZscore = normalize(nominalMetaFeatures, "nominal")
     val numZscore = normalize(numericMetaFeatures, "numeric")
 
-    nomZscore.show
+//    nomZscore.show
 
     // Get the attributes names and meta-features names
     // NOTE: This one differs from the source code in Spark since we got the names through logicalPlan().output instead of schema
